@@ -491,16 +491,11 @@ class Graph_maker:
 
         if not mixing_colors:
             #Send to draw the graph
-            self.graph_create_scatter(X[:,0], X[:,1], (activation2.output >= 0.5).ravel(), s, cmap, graph_name, axis_ratio)
+            self.graph_create_scatter(X[:,0], X[:,1], (activation_sigmoid.output >= 0.5).ravel(), s, cmap, graph_name, axis_ratio)
         else:
             #Create colors
-            colors = np.array([cm.tab10(i)[:3] for i in range(len(activation_sigmoid.output[0]))])
-            colors_exp = colors[np.newaxis, :, :]
-            prob_exp = activation_sigmoid.output[:, :, np.newaxis]
-            result = colors_exp * prob_exp
-            summed_result = np.sum(result, axis=1)
-            summed_result = np.clip(summed_result, 0, 1)
-            self.graph_create_scatter(X[:,0], X[:,1], summed_result, s, None, graph_name, axis_ratio)
+            gray_colors = np.repeat(activation_sigmoid.output, 3, axis=1) 
+            self.graph_create_scatter(X[:,0], X[:,1], gray_colors, s, None, graph_name, axis_ratio)
             
     #Show graph
     def graph_show(self):
@@ -684,3 +679,17 @@ graph_maker.graph_create_scatter(X_test[:,0], X_test[:,1], c=(activation2.output
 #Show graph and clear data
 graph_maker.graph_show()
 graph_maker.clear_graphs()
+
+
+#Graph for all datas
+x_start_end = np.array([-1, 1])
+y_start_end = np.array([-1, 1])
+big_graph_ratio = 4
+x_start_end_big = x_start_end * big_graph_ratio
+y_start_end_big = y_start_end * big_graph_ratio
+
+graph_maker.graph_create_all_graph(x_start_end[0], x_start_end[1], y_start_end[0], y_start_end[1], graph_name="All possible data", axis_ratio=1)
+graph_maker.graph_create_all_graph(x_start_end_big[0], x_start_end_big[1], y_start_end_big[0], y_start_end_big[1], graph_name="All possible data big", axis_ratio=1)
+graph_maker.graph_create_all_graph(x_start_end[0], x_start_end[1], y_start_end[0], y_start_end[1], graph_name="All possible data all accuracys", axis_ratio=1, mixing_colors=1)
+graph_maker.graph_create_all_graph(x_start_end_big[0], x_start_end_big[1], y_start_end_big[0], y_start_end_big[1], graph_name="All possible data big all accuracys", axis_ratio=1, mixing_colors=1)
+graph_maker.graph_show()
