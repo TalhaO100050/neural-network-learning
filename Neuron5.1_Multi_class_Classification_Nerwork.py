@@ -229,7 +229,6 @@ class Loss_BinaryCrossentropy(Loss):
         #Calculate sample-wise loss
         sample_losses = -(y_true * np.log(y_pred_clipped) + (1 - y_true) * np.log(1 - y_pred_clipped))
         sample_losses = np.mean(sample_losses, axis=-1)
-        sample_losses = np.mean(sample_losses)
 
         return sample_losses
     
@@ -486,16 +485,21 @@ class Graph_maker:
         dense1.forward(X)
         activation1.forward(dense1.output)
         dense2.forward(activation1.output)
-        activation_sigmoid = Activation_Sigmoid()
-        activation_sigmoid.forward(dense2.output)
+        activation_softmax = Activation_Softmax()
+        activation_softmax.forward(dense2.output)
 
         if not mixing_colors:
             #Send to draw the graph
-            self.graph_create_scatter(X[:,0], X[:,1], (activation_sigmoid.output >= 0.5).ravel(), s, cmap, graph_name, axis_ratio)
+            self.graph_create_scatter(X[:,0], X[:,1], np.argmax(activation_softmax.output, axis=1), s, cmap, graph_name, axis_ratio)
         else:
             #Create colors
-            gray_colors = np.repeat(activation_sigmoid.output, 3, axis=1) 
-            self.graph_create_scatter(X[:,0], X[:,1], gray_colors, s, None, graph_name, axis_ratio)
+            colors = np.array([cm.tab10(i)[:3] for i in range(len(activation_softmax.output[0]))])
+            colors_exp = colors[np.newaxis, :, :]
+            prob_exp = activation_softmax.output[:, :, np.newaxis]
+            result = colors_exp * prob_exp
+            summed_result = np.sum(result, axis=1)
+            summed_result = np.clip(summed_result, 0, 1)
+            self.graph_create_scatter(X[:,0], X[:,1], summed_result, s, None, graph_name, axis_ratio)
             
     #Show graph
     def graph_show(self):
@@ -560,14 +564,13 @@ class Graph_maker:
 
 
 #Create dataset
-X, y = spiral_data(samples=1000, classes=2)
-
-y = y.reshape(-1, 1)
+X, y = spiral_data(samples=1000, classes=3)
+#X, y = vertical_data(samples=1000, classes=3)
 
 #Neuron numbers
 layer1 = 2
-layer2 = 64
-layer3 = 1
+layer2 = 512
+layer3 = 3
 
 
 #Create layers
@@ -577,13 +580,17 @@ dense2 = Layer_Dense(layer2, layer3)
 #Create activation functions
 activation1 = Activation_ReLU()
 
-activation2 = Activation_Sigmoid()
+#Create dropout layer
+dropout1 = Layer_Dropout(0.1)
 
 #Create loss function
-loss_function = Loss_BinaryCrossentropy()
+loss_activation = Activation_Softmax_Loss_CategoricalCrossentropy()
 
 #Create optimizer
-optimizer = Optimizer_Adam(decay=5e-7)
+#optimizer = Optimizer_SGD(decay=1e-3, momentum=0.9)
+#optimizer = Optimizer_Adagrad(decay=1e-4)
+#optimizer = Optimizer_RMSprop(learning_rate=0.02, decay=1e-5, rho=0.999)
+optimizer = Optimizer_Adam(learning_rate=0.05, decay=5e-5)
 
 #Make lists for graphs
 all_loss = []
@@ -596,20 +603,20 @@ for epoch in range(10001):
     #Calculate
     dense1.forward(X)
     activation1.forward(dense1.output)
+    dropout1.forward(activation1.output)
 
-    dense2.forward(activation1.output)
+    dense2.forward(dropout1.output)
 
-    activation2.forward(dense2.output)
+    data_loss = loss_activation.forward(dense2.output, y)
 
-    data_loss = loss_function.forward(activation2.output, y)
-
-    regularization_loss = loss_function.regularization_loss(dense1) + loss_function.regularization_loss(dense2)
+    regularization_loss = loss_activation.loss.regularization_loss(dense1) + loss_activation.loss.regularization_loss(dense2)
 
     loss = data_loss + regularization_loss
 
-    #Calculate accuracy from output of activation2 and targets
-    #Part in the brackets returns a binary mask - array consisting of True/False values, multiplying it by 1 changes it into array of 1s and 0s
-    predictions = (activation2.output >= 0.5) * 1
+    #Calculate accuracy from output of activation3 and targets calculate values along first axis
+    predictions = np.argmax(loss_activation.output, axis=1)
+    if len(y.shape) == 2:
+        y = np.argmax(y, axis=1)
     accuracy = np.mean(predictions==y)
 
     if not epoch % 100:
@@ -625,10 +632,10 @@ for epoch in range(10001):
         all_epoch.append(epoch)
 
     #Backward pass
-    loss_function.backward(activation2.output, y)
-    activation2.backward(loss_function.dinputs)
-    dense2.backward(activation2.dinputs)
-    activation1.backward(dense2.dinputs)
+    loss_activation.backward(loss_activation.output, y)
+    dense2.backward(loss_activation.dinputs)
+    dropout1.backward(dense2.dinputs)
+    activation1.backward(dropout1.dinputs)
     dense1.backward(activation1.dinputs)
     
     #Update weights and biases
@@ -645,7 +652,7 @@ graph_maker = Graph_maker()
 
 #Example, guess, loss and accuracy graphs
 graph_maker.graph_create_scatter(X[:,0], X[:,1], c=y, graph_name="Gerçek veri")
-graph_maker.graph_create_scatter(X[:,0], X[:,1], c=(activation2.output >= 0.5).ravel(), graph_name="Tahmin")
+graph_maker.graph_create_scatter(X[:,0], X[:,1], c=np.argmax(loss_activation.output, axis=1), graph_name="Tahmin")
 graph_maker.graph_create_plot(all_epoch, all_loss, graph_name="Loss graph")
 graph_maker.graph_create_plot(all_epoch, all_accuracy, graph_name="Accuracy graph")
 
@@ -654,31 +661,31 @@ graph_maker.graph_create_plot(all_epoch, all_accuracy, graph_name="Accuracy grap
 #Validate the model
 
 #Create test data 
-X_test, y_test = spiral_data(samples=1000, classes=2)
-
-y_test = y_test.reshape(-1, 1)
+X_test, y_test = spiral_data(samples=1000, classes=3)
 
 #Perform a forward pass of our testing data through this layer
 dense1.forward(X_test)
 activation1.forward(dense1.output)
 dense2.forward(activation1.output)
-activation2.forward(dense2.output)
-loss = loss_function.forward(activation2.output, y_test)
+loss = loss_activation.forward(dense2.output, y_test)
 
 #Calculate accuracy from output of activation2 and targets calculate values along first axis
-predictions = (activation2.output >= 0.5) * 1
-accuracy = np.mean(predictions==y)
+predictions = np.argmax(loss_activation.output, axis=1)
+if len(y_test.shape) == 2:
+    y_test = np.argmax(y_test, axis=1)
+accuracy = np.mean(predictions == y_test)
 
-print(f'validation, acc, {accuracy:.3}, loss: {loss:.3}')
+print(f'acc, {accuracy:.3}, loss: {loss:.3}')
 
 
 #Test graphs
 graph_maker.graph_create_scatter(X_test[:,0], X_test[:,1], c=y_test, graph_name="Test verisi")
-graph_maker.graph_create_scatter(X_test[:,0], X_test[:,1], c=(activation2.output >= 0.5).ravel(), graph_name="Test verisi tahmin")
+graph_maker.graph_create_scatter(X_test[:,0], X_test[:,1], c=np.argmax(loss_activation.output, axis=1), graph_name="Test verisi tahmin")
 
 #Show graph and clear data
 graph_maker.graph_show()
 graph_maker.clear_graphs()
+
 
 
 #Graph for all datas
