@@ -1,0 +1,906 @@
+import numpy as np
+import nnfs
+from nnfs.datasets import spiral_data
+from nnfs.datasets import vertical_data
+from nnfs.datasets import sine_data
+
+nnfs.init()
+
+import matplotlib.pyplot as plt
+import matplotlib.cm as cm
+
+import math
+
+#Input "layer"
+class Layer_Input:
+    #Forward pass
+    def forward(self, inputs):
+        self.output = inputs
+
+
+#Dense layer
+class Layer_Dense:
+    #Dense layer initialization
+    def __init__(self, n_inputs, n_neurons, weight_regularizer_l1=0, weight_regularizer_l2=0, bias_regularizer_l1=0, bias_regularizer_l2=0):
+        #Initialize weights and biases
+        self.weights = 0.1 * np.random.randn(n_inputs, n_neurons)
+        self.biases = np.zeros((1,n_neurons))
+        #Set regularization strenght
+        self.weight_regularizer_l1 = weight_regularizer_l1
+        self.weight_regularizer_l2 = weight_regularizer_l2
+        self.bias_regularizer_l1 = bias_regularizer_l1
+        self.bias_regularizer_l2 = bias_regularizer_l2
+
+    #Forward pass
+    def forward(self, inputs):
+        #Calculate output values from inputs, weight and biases
+        self.output = np.dot(inputs, self.weights) + self.biases
+        self.inputs = inputs
+
+    #Backward pass
+    def backward(self, dvalues):
+        #Gradients on parameters
+        self.dweights = np.dot(self.inputs.T, dvalues)
+        self.dbiases = np.sum(dvalues, axis=0, keepdims=True)
+
+        #Gradients on regularization 
+        #L1 weights 
+        if self.weight_regularizer_l1 > 0:
+            dL1 = np.ones_like(self.weights)
+            dL1[self.weights < 0] = -1
+            self.dweights += self.weight_regularizer_l1 * dL1
+        #L2 weights
+        if self.weight_regularizer_l2 > 0:
+            self.dweights += 2 * self.weight_regularizer_l2 * self.weights 
+        #L1 biases 
+        if self.bias_regularizer_l1 > 0:
+            dL1 = np.ones_like(self.biases)
+            dL1[self.biases < 0] = -1
+            self.dbiases += self.bias_regularizer_l1 * dL1
+        #L2 biases
+        if self.bias_regularizer_l2 > 0:
+            self.dbiases += 2 * self.bias_regularizer_l2 * self.biases 
+
+
+        #Gradient on values
+        self.dinputs = np.dot(dvalues, self.weights.T)
+
+
+#ReLU activation
+class Activation_ReLU:
+    #Forward pass
+    def forward(self, inputs):
+        #Calculate output values from inputs
+        self.output = np.maximum(0, inputs)
+
+        #Remember the input values
+        self.inputs = inputs
+
+    #Backward pass
+    def backward(self, dvalues):
+        #Since we need to modify the original variable, let's make a copy of the values first
+        self.dinputs = dvalues.copy()
+
+        #Zero gradient where input values were negative
+        self.dinputs[self.inputs <= 0] = 0
+
+    #Calculate predictions for outputs
+    def predictions(self, outputs):
+        return outputs
+
+
+#Sigmoid activation
+class Activation_Sigmoid:
+    #Forward pass
+    def forward(self, inputs):
+        #Save input and calculate/save output of the sigmoid function
+        self.inputs = inputs
+        self.output = 1 / (1 + np.exp(-inputs))
+
+    #Backward pass
+    def backward(self, dvalues):
+        #Derivative - calculates from output of the sigmoid function
+        self.dinputs = dvalues * (1 - self.output) * self.output
+
+    #Calculate predictions for outputs
+    def predictions(self, outputs):
+        return (outputs > 0.5) * 1
+
+
+#Softmax activation
+class Activation_Softmax:
+    #Forward pass
+    def forward(self, inputs):
+        #Get unnormalized probabilities
+        exp_values = np.exp(inputs - np.max(inputs, axis=1, keepdims=True))
+
+        #Normalize them for each sample
+        probabilities = exp_values / np.sum(exp_values, axis=1, keepdims=True)
+
+        self.output = probabilities
+
+    #Backward pass
+    def backward(self, dvalues):
+        #Create uninitilazed array
+        self.dinputs = np.empty_like(dvalues)
+
+        #Enumerate outputs and gradients
+        for index, (single_output, single_dvalues) in enumerate(zip(self.output, dvalues)):
+            #Flatten output array
+            single_output = single_output.reshape(-1,1)
+            #Calculate Jacobian matrix of the output and 
+            jacobian_matrix = np.diagflat(single_output) - np.dot(single_output, single_output.T)
+            #Calculate sample-wise gradient and add it to the array of sample gradients 
+            self.dinputs[index] = np.dot(jacobian_matrix, single_dvalues)
+
+    #Calculate predictions for outputs
+    def predictions(self, outputs):
+        return np.argmax(outputs, axis=1)
+
+
+#Linear Activation
+class Activation_Linear:
+    #Forward pass
+    def forward(self, inputs):
+        #Just remember the values
+        self.inputs = inputs
+        self.output = inputs
+
+    #Backward pass
+    def backward(self, dvalues):
+        #derivative is 1, 1 * dvalues - the chain rule 
+        self.dinputs = dvalues.copy()
+
+    #Calculate predictions for outputs
+    def predictions(self, outputs):
+        return outputs
+
+
+#Dropout
+class Layer_Dropout:
+    #Init
+    def __init__(self, rate):
+        #Store rate, we invert it as for example for dropout of 0.1 we need success rate of 0.9
+        self.rate = 1 - rate
+
+    #Forward pass
+    def forward(self, inputs):
+        #Save input values 
+        self.inputs = inputs
+        #Generate and scale mask
+        self.binary_mask = np.random.binomial(1, self.rate, size=inputs.shape) / self.rate
+
+        #Applay mask to output values
+        self.output = inputs * self.binary_mask
+
+    #Backward pass
+    def backward(self, dvalues):
+        #Gradient of values
+        self.dinputs = dvalues * self.binary_mask
+
+
+#Common loss class
+class Loss:
+    #Calculates the data and regularization losses given model output and ground truth values
+    def calculate(self, output, y):
+        #Calculate sample losses
+        sample_losses = self.forward(output, y)
+
+        #Calculate mean loss
+        data_loss = np.mean(sample_losses)
+
+        #Return loss
+        return data_loss, self.regularization_loss()
+    
+    #Regularization loss calculation
+    def regularization_loss(self, layer):
+        #0 by default
+        regularization_loss = 0
+
+        #Calculate regularization loss iterate all trainable layers
+        for layer in self.trainable_layers:
+
+            #L1 regularization - weights
+            if layer.weight_regularizer_l1 > 0:
+                regularization_loss += layer.weight_regularizer_l1 * np.sum(np.abs(layer.weights))
+
+            #L2 regularization - weights
+            if layer.weight_regularizer_l2 > 0:
+                regularization_loss += layer.weight_regularizer_l2 * np.sum(layer.weights * layer.weights)
+
+            #L1 regularization - biases
+            if layer.bias_regularizer_l1 > 0:
+                regularization_loss += layer.bias_regularizer_l1 * np.sum(np.abs(layer.biases))
+
+            #L2 regularization - biases
+            if layer.bias_regularizer_l2 > 0:
+                regularization_loss += layer.bias_regularizer_l2 * np.sum(layer.biases * layer.biases)
+
+        return regularization_loss
+    
+    #Set/remember trainable layers
+    def remember_trainable_layers(self, trainable_layers):
+        self.trainable_layers = trainable_layers  
+
+
+#Categorical cross-entropy loss
+class Loss_CategoricalCrossentropy(Loss):
+    #Forward pass
+    def forward(self, y_pred, y_true):
+        #Number of samples in a batch
+        samples = len(y_pred)
+
+        #Clip data to prevent division by 0
+        #Clip both sides to not drag mean towards any value
+        y_pred_clipped = np.clip(y_pred, 1e-7, 1 - 1e-7)
+
+        #Probabilities for target values - only if categorical lables
+        if len(y_true.shape) == 1:
+            correct_confidences = y_pred_clipped[range(samples), y_true]
+
+        #Mask values - only for one-hot encoded labels
+        elif len(y_true.shape) == 2:
+            correct_confidences = np.sum(y_pred_clipped * y_true, axis=1)
+
+        #Losses
+        negative_log_likelihoods = -np.log(correct_confidences)
+        return negative_log_likelihoods
+    
+    #Backward pass
+    def backward(self, dvalues, y_true):
+        #Number of samples
+        samples = len(dvalues)
+        #Number of labels in every sample we'll use the first sample to count them
+        labels = len(dvalues[0])
+
+        #If labels are sparse, turn them into one-hot vector
+        if len(y_true.shape) == 1:
+            y_true = np.eye(labels)[y_true]
+
+        #Calculate gradient
+        self.dinputs = -y_true / dvalues
+        #Normalize gradient
+        self.dinputs = self.dinputs/ samples
+
+
+#Softmax classifier - combined Softmax activation and cross-entropy loss for fast backward step
+class Activation_Softmax_Loss_CategoricalCrossentropy():
+    #Creates activation and loss function objects
+    def __init__(self):
+        self.activation = Activation_Softmax()
+        self.loss = Loss_CategoricalCrossentropy()
+
+    #Forward pass
+    def forward(self, inputs, y_true):
+        #Output layer's activation function
+        self.activation.forward(inputs)
+        #Set the output
+        self.output = self.activation.output
+        #Calculate and return loss value
+        return self.loss.calculate(self.output, y_true)
+    
+    #Backward pass
+    def backward(self, dvalues, y_true):
+        #Number of samples
+        samples = len(dvalues)
+        #If labels are one-hot encoded, turn them into discrete values
+        if len(y_true.shape) == 2:
+            y_true = np.argmax(y_true, axis=1)
+
+        #Copy so we can safely modify
+        self.dinputs = dvalues.copy()
+        #Calculate gradient
+        self.dinputs[range(samples), y_true] -= 1
+        #Normalize gradient
+        self.dinputs = self.dinputs / samples
+
+
+#Binary cross-entropy loss
+class Loss_BinaryCrossentropy(Loss):
+    #Forward pass
+    def forward(self, y_pred, y_true):
+        #Clip data to prevent division by 0
+        #Clip both sides to not drag mean towars any value
+        y_pred_clipped = np.clip(y_pred, 1e-7, 1 - 1e-7)
+
+        #Calculate sample-wise loss
+        sample_losses = -(y_true * np.log(y_pred_clipped) + (1 - y_true) * np.log(1 - y_pred_clipped))
+        sample_losses = np.mean(sample_losses, axis=-1)
+
+        return sample_losses
+    
+    #Backward pass
+    def backward(self, dvalues, y_true):
+        #Number of samples
+        samples = len(dvalues)
+        #Number of outputs in every sample 
+        #We'll use the first sample to count them
+        outputs = len(dvalues[0])
+
+        #Clip data to prevent division by 0
+        #Clip both sides to not drag mean towards any value
+        clipped_dvalues = np.clip(dvalues, 1e-7, 1 - 1e-7)
+
+        #Calculate gradient
+        self.dinputs = -(y_true / clipped_dvalues - (1 - y_true) / (1 - clipped_dvalues)) / outputs
+
+        #Normalize gradient
+        self.dinputs = self.dinputs / samples
+
+
+#Mean Squared Error loss
+class Loss_MeanSquaredError(Loss):
+    #Forward pass
+    def forward(self, y_pred, y_true):
+        #Calculate loss
+        sample_losses = np.mean((y_true - y_pred) ** 2, axis=-1)
+
+        #Return loss 
+        return sample_losses
+
+    #Backward pass
+    def backward(self, dvalues, y_true):
+        #Number of samples
+        samples = len(dvalues)
+        #Number of outputs in every sample
+        #We'll use the first sample to count them 
+        outputs = len(dvalues[0])
+
+        #Gradient on values 
+        self.dinputs = -2 * (y_true - dvalues) / outputs
+        #Normalize gradient
+        self.dinputs = self.dinputs / samples
+
+
+#Mean Absolute Error loss
+class Loss_MeanAbsoluteError(Loss):
+    #Forward pass
+    def forward(self, y_pred, y_true):
+        #Calculate loss
+        sample_losses = np.mean(np.abs(y_true - y_pred), axis=-1)
+
+        #Return loss 
+        return sample_losses
+
+    #Backward pass
+    def backward(self, dvalues, y_true):
+        #Number of samples
+        samples = len(dvalues)
+        #Number of outputs in every sample
+        #We'll use the first sample to count them 
+        outputs = len(dvalues[0])
+
+        #Gradient on values 
+        self.dinputs = np.sign(y_true - dvalues) / outputs
+        #Normalize gradient
+        self.dinputs = self.dinputs / samples
+
+
+#Common accuracy class
+class Accuracy:
+    #Calculate an accuracy given predictions and ground truth values
+    def calculate(self, predictions, y):
+        #Get comparison results 
+        comparisons = self.compare(predictions, y)
+
+        #Calculate an accuracy
+        accuracy = np.mean(comparisons)
+
+        #Return accuracy
+        return accuracy
+
+
+#Accuracy calculation for regression model
+class Accuracy_Regression(Accuracy):
+    def __init__(self):
+        #Create precision property
+        self.precision = None
+
+    #Calculate precision value based on passed in ground truth
+    def init(self, y, reinit=False):
+        if self.precision is None or reinit:
+            self.precision = np.std(y) / 250
+
+    #Compares predictions to the ground truth values
+    def compare(self, predictions, y):
+        return np.absolute(predictions - y) < self.precision
+
+
+#SGD optimizer
+class Optimizer_SGD:
+    #Initialize optimizer - set settings, learning rate of 1. is default for this optimizer
+    def __init__(self, learning_rate=1., decay=0., momentum=0.):
+        self.learning_rate = learning_rate
+        self.current_learning_rate = learning_rate
+        self.decay = decay
+        self.iterations = 0
+        self.momentum = momentum
+
+    #Call once before any parameters update
+    def pre_update_params(self):
+        if self.decay:
+            self.current_learning_rate = self.learning_rate * (1. / (1. + self.decay * self.iterations))
+
+    #Update parameters
+    def update_params(self, layer):
+        #If we use momentum
+        if self.momentum:
+            #If layer does not contain momentum arrays, create them filled with zeros
+            if not hasattr(layer, 'weight_momentums'):
+                layer.weight_momentums = np.zeros_like(layer.weights)
+                #If there is no momentum array for weights the array doesn't exist for biases yet either
+                layer.bias_momentums = np.zeros_like(layer.biases)
+
+            #Build weight updates with momentum - take previous updates multiplied by retain factor and update with current gradients
+            weight_updates = self.momentum * layer.weight_momentums - self.current_learning_rate * layer.dweights
+            layer.weight_momentums = weight_updates
+            #Build bias updats
+            bias_updates = self.momentum * layer.bias_momentums - self.current_learning_rate * layer.dbiases
+            layer.bias_momentums = bias_updates
+
+        #Vanilla SGD updates (as before momentum update)
+        else:
+            weight_updates = -self.current_learning_rate * layer.dweights
+            bias_updates = -self.current_learning_rate * layer.dbiases
+
+        #Update weights and biases using either vanilla or momentum updates
+        layer.weights += weight_updates
+        layer.biases += bias_updates
+
+    #Call once after any parameter updates
+    def post_update_params(self):
+        self.iterations += 1
+
+
+#Adagrad optimizer
+class Optimizer_Adagrad:
+    #Initialize optimizer - set settings
+    def __init__(self, learning_rate=1., decay=0., epsilon=1e-7):
+        self.learning_rate = learning_rate
+        self.current_learning_rate = learning_rate
+        self.decay = decay
+        self.iterations = 0
+        self.epsilon = epsilon
+
+    #Call once before any parameters update
+    def pre_update_params(self):
+        if self.decay:
+            self.current_learning_rate = self.learning_rate * (1. / (1. + self.decay * self.iterations))
+
+    #Update parameters
+    def update_params(self, layer):
+        #If layer does not contain cache arrays, create them filled with zeros
+        if not hasattr(layer, 'weight_cache'):
+            layer.weight_cache = np.zeros_like(layer.weights)
+            layer.bias_cache = np.zeros_like(layer.biases)
+       
+        #Update cache with squared current gradients
+        layer.weight_cache += layer.dweights ** 2
+        layer.bias_cache += layer.dbiases ** 2
+
+        #Vanilla SGD parameter update + normalization with square rooted cache
+        layer.weights += -self.current_learning_rate * layer.dweights / (np.sqrt(layer.weight_cache) + self.epsilon)
+        layer.biases += -self.current_learning_rate * layer.dbiases / (np.sqrt(layer.bias_cache) + self.epsilon)
+
+    #Call once after any parameter updates
+    def post_update_params(self):
+        self.iterations += 1
+
+
+#RMSprop optimizer
+class Optimizer_RMSprop:
+    #Initialize optimizer - set settings
+    def __init__(self, learning_rate=0.001, decay=0., epsilon=1e-7, rho=0.9):
+        self.learning_rate = learning_rate
+        self.current_learning_rate = learning_rate
+        self.decay = decay
+        self.iterations = 0
+        self.epsilon = epsilon
+        self.rho = rho
+
+    #Call once before any parameters update
+    def pre_update_params(self):
+        if self.decay:
+            self.current_learning_rate = self.learning_rate * (1. / (1. + self.decay * self.iterations))
+
+    #Update parameters
+    def update_params(self, layer):
+        #If layer does not contain cache arrays, create them filled with zeros
+        if not hasattr(layer, 'weight_cache'):
+            layer.weight_cache = np.zeros_like(layer.weights)
+            layer.bias_cache = np.zeros_like(layer.biases)
+       
+        #Update cache with squared current gradients
+        layer.weight_cache = self.rho * layer.weight_cache + (1 - self.rho) * layer.dweights ** 2
+        layer.bias_cache = self.rho * layer.bias_cache + (1 - self.rho) * layer.dbiases ** 2
+
+        #Vanilla SGD parameter update + normalization with square rooted cache
+        layer.weights += -self.current_learning_rate * layer.dweights / (np.sqrt(layer.weight_cache) + self.epsilon)
+        layer.biases += -self.current_learning_rate * layer.dbiases / (np.sqrt(layer.bias_cache) + self.epsilon)
+
+    #Call once after any parameter updates
+    def post_update_params(self):
+        self.iterations += 1
+
+
+#Adam optimizer
+class Optimizer_Adam:
+    #Initialize optimizer - set settings
+    def __init__(self, learning_rate=0.001, decay=0., epsilon=1e-7, beta_1=0.9, beta_2 = 0.999):
+        self.learning_rate = learning_rate
+        self.current_learning_rate = learning_rate
+        self.decay = decay
+        self.iterations = 0
+        self.epsilon = epsilon
+        self.beta_1 = beta_1
+        self.beta_2 = beta_2
+
+    #Call once before any parameters update
+    def pre_update_params(self):
+        if self.decay:
+            self.current_learning_rate = self.learning_rate * (1. / (1. + self.decay * self.iterations))
+
+    #Update parameters
+    def update_params(self, layer):
+        #If layer does not contain cache arrays, create them filled with zeros
+        if not hasattr(layer, 'weight_cache'):
+            layer.weight_cache = np.zeros_like(layer.weights)
+            layer.bias_cache = np.zeros_like(layer.biases)
+            layer.weight_momentums = np.zeros_like(layer.weights)
+            layer.bias_momentums = np.zeros_like(layer.biases)
+
+        #Update momentum with current gradients
+        layer.weight_momentums = self.beta_1 * layer.weight_momentums + (1 - self.beta_1) * layer.dweights
+        layer.bias_momentums = self.beta_1 * layer.bias_momentums + (1 - self.beta_1) * layer.dbiases
+       
+        #Get corrected momentum
+        weight_momentums_corrected = layer.weight_momentums / (1 - self.beta_1 ** (self.iterations + 1))
+        bias_momentums_corrected = layer.bias_momentums / (1 - self.beta_1 ** (self.iterations + 1))
+
+        #Update cache with squared current gradients
+        layer.weight_cache = self.beta_2 * layer.weight_cache + (1 - self.beta_2) * layer.dweights ** 2
+        layer.bias_cache = self.beta_2 * layer.bias_cache + (1 - self.beta_2) * layer.dbiases ** 2
+
+        #Get corrected cache
+        weight_cache_corrected = layer.weight_cache/ (1 - self.beta_2 ** (self.iterations + 1))
+        bias_cache_corrected = layer.bias_cache/ (1 - self.beta_2 ** (self.iterations + 1))
+
+        #Vanilla SGD parameter update + normalization with square rooted cache
+        layer.weights += -self.current_learning_rate * weight_momentums_corrected / (np.sqrt(weight_cache_corrected) + self.epsilon)
+        layer.biases += -self.current_learning_rate * bias_momentums_corrected / (np.sqrt(bias_cache_corrected) + self.epsilon)
+
+    #Call once after any parameter updates
+    def post_update_params(self):
+        self.iterations += 1
+
+
+#Create graphs
+class Graph_maker:
+    def __init__(self):
+        self.graph_size = 0
+        self.graphs = []
+
+    #Change graph size
+    def set_graph_size(self, graph_size):
+        self.graph_size = graph_size
+
+    #Delete saved graphs
+    def clear_graphs(self):
+        self.graphs = []
+
+    #Basic graph - scatter graph
+    def graph_create_scatter(self, X, y, c=0, s=15, cmap='brg', graph_name="", axis_ratio=0):
+        self.graphs.append([0, X.copy(), y.copy(), c.copy(), s, cmap, graph_name, axis_ratio])
+
+    #Basic graph - plot graph
+    def graph_create_plot(self, X, Y, graph_name="", axis_ratio=0):
+        self.graphs.append([1, X.copy(), Y.copy(), graph_name, axis_ratio])
+
+    #Custom graph - all data
+    def graph_create_all_graph(self, x_start, x_end, y_start, y_end, points_per_axis=401, s=1, cmap='brg', graph_name="", axis_ratio=0, mixing_colors=0):
+        #Create data set
+        X = np.array([[(x_end - x_start) / (points_per_axis - 1) * i + x_start,
+                        (y_end - y_start) / (points_per_axis - 1) * j + y_start]
+                        for i in range(points_per_axis)
+                        for j in range(points_per_axis)])
+        
+        #Calculate
+        dense1.forward(X)
+        activation1.forward(dense1.output)
+        dense2.forward(activation1.output)
+        activation_softmax = Activation_Softmax()
+        activation_softmax.forward(dense2.output)
+
+        if not mixing_colors:
+            #Send to draw the graph
+            self.graph_create_scatter(X[:,0], X[:,1], np.argmax(activation_softmax.output, axis=1), s, cmap, graph_name, axis_ratio)
+        else:
+            #Create colors
+            colors = np.array([cm.tab10(i)[:3] for i in range(len(activation_softmax.output[0]))])
+            colors_exp = colors[np.newaxis, :, :]
+            prob_exp = activation_softmax.output[:, :, np.newaxis]
+            result = colors_exp * prob_exp
+            summed_result = np.sum(result, axis=1)
+            summed_result = np.clip(summed_result, 0, 1)
+            self.graph_create_scatter(X[:,0], X[:,1], summed_result, s, None, graph_name, axis_ratio)
+            
+    #Show graph
+    def graph_show(self):
+        graph_number = len(self.graphs)
+
+        #Calculate shape of the graph
+        if self.graph_size:
+            graph_row = self.graph_size[1]
+            graph_column = self.graph_size[0]
+        else:
+            if graph_number <= 2:
+                graph_row = 1
+                graph_column = math.ceil(graph_number / graph_row)
+            elif graph_number <= 6:
+                graph_row = 2
+                graph_column = math.ceil(graph_number / graph_row)
+            else:
+                graph_row = 3
+                graph_column = math.ceil(graph_number / graph_row)
+
+        #Window shape
+        plt.figure(figsize=(graph_column * 5, graph_row * 5))
+
+        #Draw graphs
+        for i in range(len(self.graphs)):
+            plt.subplot(graph_row, graph_column, i + 1)
+
+            #Graph data
+            graph_data = self.graphs[i]
+
+            #Make graph
+            if graph_data[0] == 0: #Scatter graph
+
+                if isinstance(graph_data[3], np.ndarray): #graph_data[3] = c
+                    if graph_data[5] != None:
+                        plt.scatter(graph_data[1], graph_data[2], c=graph_data[3], s=graph_data[4], cmap=graph_data[5])
+                    else:
+                        plt.scatter(graph_data[1], graph_data[2], c=graph_data[3], s=graph_data[4])
+                else:
+                    plt.scatter(graph_data[1], graph_data[2], s=graph_data[4])
+                
+                #Set name
+                plt.title(graph_data[6])
+
+                #Set ratio
+                if graph_data[7] == 1: #graph_data[7] = axis_ratio
+                    plt.axis('equal')
+
+            elif graph_data[0] == 1: #Plot graph
+
+                plt.plot(graph_data[1], graph_data[2])
+
+                #Set name
+                plt.title(graph_data[3])
+
+                #Set ratio
+                if graph_data[4]: #graph_data[4] = axis_ratio
+                    plt.axis('equal')
+
+        plt.show()
+
+
+#Model class
+class Model:
+    def __init__(self):
+        #Create a list of network objects
+        self.layers = []
+
+    #Add objects to the model
+    def add(self, layer):
+        self.layers.append(layer)
+
+    #Set loss and optimizer
+    def set(self, *, loss, optimizer, accuracy):
+        self.loss = loss
+        self.optimizer = optimizer
+        self.accuracy = accuracy
+
+    #Finalize the model
+    def finalize(self):
+        #Create and set the input layer
+        self.input_layer = Layer_Input()
+
+        #Count all the objects
+        layer_count = len(self.layers)
+
+        #Initialize a list containing trainable layers
+        self.trainable_layers = []
+
+        #Iterate the objects
+        for i in range(layer_count):
+            #If it's the first layer the previous layer object is the input layer
+            if i == 0:
+                self.layers[i].prev = self.input_layer
+                self.layers[i].next = self.layers[i+1]
+
+            #All layers expect for the first and the last
+            elif i < layer_count - 1:
+                self.layers[i].prev = self.layers[i-1]
+                self.layers[i].next = self.layers[i+1]
+
+            #The last layer - the next onject is the loss
+            #Also let's save aside the referance to the last object whose output is the model's output 
+            else:
+                self.layers[i].prev = self.layers[i-1]
+                self.layers[i].next = self.loss
+                self.output_layer_activation = self.layers[i]
+
+            #If layers contains an attribute calles "weights", it's trainable layer - add it to the list of the trainable layers
+            #We don't need to check for biases - checking for the weights is enough
+            if hasattr(self.layers[i], "weights"):
+                self.trainable_layers.append(self.layers[i])
+
+        self.loss.remember_trainable_layers(self.trainable_layers)
+
+    #Train the model
+    def train(self, X, y, *, epochs=1, print_every=1):
+        #Initalize accuracy object
+        self.accuracy.init(y)
+
+        #Main training loop
+        for epoch in range(1, epochs + 1):
+
+            #Perform the forward pass
+            output = self.forward(X)
+
+            #Calculate loss
+            data_loss, regularization_loss = self.loss.calculate(output, y)
+            loss = data_loss + regularization_loss
+
+            #Get predictions and calculate an accuracy
+            predictions = self.output_layer_activation.predictions(output)
+            accuracy = self.accuracy.calculate(predictions, y)
+
+    #Perform forward pass
+    def forward(self, X):
+        #Call forward method on the input layer this will set the output property that the first layer in "prev" object is expecting
+        self.input_layer.forward(X)
+
+        #Call forward method of every object in a chain. Pass output of the previous object as a parameter
+        for layer in self.layers:
+            layer.forward(layer.prev.output)
+
+        #"layer" is now the last object from the list, return its output
+        return layer.output
+
+            
+
+
+#Create dataset
+X, y = sine_data()
+
+#Instantiate the model
+model = Model()
+
+#Add layer
+model.add(Layer_Dense(1,64))
+model.add(Activation_ReLU())
+model.add(Layer_Dense(64,64))
+model.add(Activation_ReLU())
+model.add(Layer_Dense(64,1))
+model.add(Activation_Linear())
+
+#Set loss and optimizer objects
+model.set(
+    loss=Loss_MeanSquaredError(),
+    optimizer=Optimizer_Adam(learning_rate=0.005, decay=1e-3)
+)
+
+model.finalize()
+
+model.train(X, y, epochs=10000, print_every=100)
+
+#Accuracy precision for accuracy calculation
+#There are no real accuracy factor for regression problem, but we can simulate/approximate it. We'll calculate it by checking how many values 
+#have a difference to their ground truth equivalent less than given precision. We'll calculate this precision as a fraction of standard deviation
+#of all the ground truth values
+accuracy_precision = np.std(y) / 250
+
+#Make lists for graphs
+all_loss = []
+all_accuracy = []
+all_epoch = []
+
+#Train in loop
+for epoch in range(10001):
+
+    #Calculate
+    dense1.forward(X)
+    activation1.forward(dense1.output)
+
+    dense2.forward(activation1.output)
+    activation2.forward(dense2.output)
+
+    dense3.forward(activation2.output)
+    activation3.forward(dense3.output)
+
+    data_loss = loss_function.calculate(activation3.output, y)
+
+    regularization_loss = \
+        loss_function.regularization_loss(dense1) + \
+        loss_function.regularization_loss(dense2) + \
+        loss_function.regularization_loss(dense3)
+
+    loss = data_loss + regularization_loss
+
+    #Calculate accuracy from activation2 and targets
+    predictions = activation3.output
+    accuracy = np.mean(np.absolute(predictions - y) < accuracy_precision)
+
+    if not epoch % 100:
+        print(f'epoch: {epoch} ' + 
+              f'acc: {accuracy:.3f} ' + 
+              f'loss: {loss:.3f} ' + 
+              f'(data_loss: {data_loss:.3f} ' + 
+              f'reg_loss: {regularization_loss:.3f}) '
+              f'lr: {optimizer.current_learning_rate} ')
+        
+        all_loss.append(loss)
+        all_accuracy.append(accuracy)
+        all_epoch.append(epoch)
+
+    #Backward pass
+    loss_function.backward(activation3.output, y)
+    activation3.backward(loss_function.dinputs)
+    dense3.backward(activation3.dinputs)
+    activation2.backward(dense3.dinputs)
+    dense2.backward(activation2.dinputs)
+    activation1.backward(dense2.dinputs)
+    dense1.backward(activation1.dinputs)
+    
+    #Update weights and biases
+    optimizer.pre_update_params()
+    optimizer.update_params(dense1)
+    optimizer.update_params(dense2)
+    optimizer.update_params(dense3)
+    optimizer.post_update_params()
+
+
+
+
+#Create graphs
+graph_maker = Graph_maker()
+
+#Example, guess, loss and accuracy graphs
+graph_maker.graph_create_plot(X, y, graph_name="Gerçek veri")
+graph_maker.graph_create_plot(X, activation3.output, graph_name="Tahmin")
+graph_maker.graph_create_plot(all_epoch, all_loss, graph_name="Loss graph")
+graph_maker.graph_create_plot(all_epoch, all_accuracy, graph_name="Accuracy graph")
+
+
+
+#Validate the model
+
+#Create test data 
+X_test, y_test = sine_data()
+
+#Perform a forward pass of our testing data through this layer
+dense1.forward(X_test)
+activation1.forward(dense1.output)
+dense2.forward(activation1.output)
+activation2.forward(dense2.output)
+dense3.forward(activation2.output)
+activation3.forward(dense3.output)
+loss = loss_function.calculate(activation3.output, y_test)
+
+accuracy_precision = np.std(y) / 250
+
+#Calculate accuracy from output of activation3 and targets calculate values along first axis
+predictions = activation3.output
+accuracy = np.mean(np.absolute(predictions < y) < accuracy_precision)
+
+print(f'acc, {accuracy:.3}, loss: {loss:.3f}')
+
+
+#Test graphs
+graph_maker.graph_create_plot(X_test, y_test, graph_name="Test verisi")
+graph_maker.graph_create_plot(X_test, activation3.output, graph_name="Test verisi tahmin")
+
+#Show graph and clear data
+graph_maker.graph_show()
