@@ -644,17 +644,24 @@ class Graph_maker:
         output = model_name.forward(X, training=False)
 
         if not mixing_colors:
-            #Send to draw the graph
-            self.graph_create_scatter(X[:,0], X[:,1], np.argmax(output, axis=1), s, cmap, graph_name, axis_ratio)
+            if isinstance(model_name.layers[-1], Activation_Softmax):
+                #Send to draw the graph
+                self.graph_create_scatter(X[:,0], X[:,1], np.argmax(output, axis=1), s, cmap, graph_name, axis_ratio)
+            elif isinstance(model_name.layers[-1], Activation_Sigmoid):
+                #Send to draw the graph
+                self.graph_create_scatter(X[:,0], X[:,1], (output < 0.5).ravel(), s, cmap, graph_name, axis_ratio)
         else:
             #Create colors
+            #Check if the output is binary
+            if len(output[0]) == 1:
+                output = np.concatenate([output, 1 - output], axis=1)
             colors = np.array([cm.tab10(i)[:3] for i in range(len(output[0]))])
-            colors_exp = colors[np.newaxis, :, :]
-            prob_exp = output[:, :, np.newaxis]
-            result = colors_exp * prob_exp
-            summed_result = np.sum(result, axis=1)
-            summed_result = np.clip(summed_result, 0, 1)
-            self.graph_create_scatter(X[:,0], X[:,1], summed_result, s, None, graph_name, axis_ratio)
+            colors_expanded = colors[np.newaxis, :, :]
+            prob_expanded = output[:, :, np.newaxis]
+            result = colors_expanded * prob_expanded
+            result_summed = np.sum(result, axis=1)
+            result_clipped = np.clip(result_summed, 0, 1)
+            self.graph_create_scatter(X[:,0], X[:,1], result_clipped, s, None, graph_name, axis_ratio)
             
     #Show graph
     def graph_show(self):
@@ -885,6 +892,7 @@ class Model:
 graph_maker = Graph_maker()
 
 
+    ###Multi-class Classification Network---------------------------------------------------------------------------------------------
 #Create dataset
 X, y = spiral_data(samples=1000, classes=3)
 X_test, y_test = spiral_data(samples=100, classes=3)
@@ -900,7 +908,7 @@ model.add(Layer_Dense(512,3))
 model.add(Activation_Softmax())
 
 
-#Set loss and optimizer objects
+#Set loss, optimizer and accuracy objects
 model.set(
     loss=Loss_CategoricalCrossentropy(),
     optimizer=Optimizer_Adam(learning_rate=0.05, decay=5e-5),
@@ -928,8 +936,103 @@ graph_maker.clear_graphs()
 #Set graphs for all the inputs
 graph_maker.graph_create_all_graph(model, -1, 1, -1, 1, graph_name="Classification Map", axis_ratio=1)
 graph_maker.graph_create_all_graph(model, -4, 4, -4, 4, graph_name="Classification Map 4x", axis_ratio=1)
-graph_maker.graph_create_all_graph(model, -1, 1, -1, 1, graph_name="Prediction Confidence Map", axis_ratio=1, mixing_colors=1)
-graph_maker.graph_create_all_graph(model, -4, 4, -4, 4, graph_name="Prediction Confidence Map 4x", axis_ratio=1, mixing_colors=1)
+graph_maker.graph_create_all_graph(model, -1, 1, -1, 1, graph_name="Confidence Map", axis_ratio=1, mixing_colors=1)
+graph_maker.graph_create_all_graph(model, -4, 4, -4, 4, graph_name="Confidence Map 4x", axis_ratio=1, mixing_colors=1)
+
+#Show the grpahs and delete them
+graph_maker.graph_show()
+graph_maker.clear_graphs()
+
+
+    ###Binary Classification Network--------------------------------------------------------------------------------------------------
+#Create dataset
+X, y = spiral_data(samples=1000, classes=2)
+X_test, y_test = spiral_data(samples=100, classes=2)
+
+y = y.reshape(-1, 1)
+y_test = y_test.reshape(-1, 1)
+
+#Instantiate the model
+model2 = Model()
+
+#Add layer
+model2.add(Layer_Dense(2,64, weight_regularizer_l2=5e-4, bias_regularizer_l2=5e-4))
+model2.add(Activation_ReLU())
+model2.add(Layer_Dense(64,1))
+model2.add(Activation_Sigmoid())
+
+#Set loss, optimizer and accuracy objects
+model2.set(
+    loss=Loss_BinaryCrossentropy(),
+    optimizer=Optimizer_Adam(decay=5e-7),
+    accuracy=Accuracy_Binary()
+)
+
+#Finalize the model
+model2.finalize()
+
+#Train the model
+model2.train(X, y, epochs=10000, print_every=100, validation_data=(X_test, y_test))
+
+#Set graphs
+graph_maker.graph_create_scatter(X[:,0], X[:,1], c=y, graph_name="Training Data")
+graph_maker.graph_create_scatter(X[:,0], X[:,1], c=(model2.forward(X,False) > 0.5).ravel(), graph_name="Training Data Prediction")
+graph_maker.graph_create_plot(model2.all_epochs, model2.all_losses, graph_name="Loss-Epoch Graph")
+graph_maker.graph_create_scatter(X_test[:,0], X_test[:,1], c=y_test, graph_name="Test Data")
+graph_maker.graph_create_scatter(X_test[:,0], X_test[:,1], c=(model2.forward(X_test,False) > 0.5).ravel(), graph_name="Test Data Prediction")
+graph_maker.graph_create_plot(model2.all_epochs, model2.all_accuracys, graph_name="Accuracy-Epoch Graph")
+
+#Show the grpahs and delete them
+graph_maker.graph_show()
+graph_maker.clear_graphs()
+
+#Set graphs for all the inputs
+graph_maker.graph_create_all_graph(model2, -1, 1, -1, 1, graph_name="Classification Map", axis_ratio=1)
+graph_maker.graph_create_all_graph(model2, -4, 4, -4, 4, graph_name="Classification Map 4x", axis_ratio=1)
+graph_maker.graph_create_all_graph(model2, -1, 1, -1, 1, graph_name="Confidence Map", axis_ratio=1, mixing_colors=1)
+graph_maker.graph_create_all_graph(model2, -4, 4, -4, 4, graph_name="Confidence Map 4x", axis_ratio=1, mixing_colors=1)
+
+#Show the grpahs and delete them
+graph_maker.graph_show()
+graph_maker.clear_graphs()
+
+
+    ##Regression Network--------------------------------------------------------------------------------------------------------------
+#Create dataset
+X, y = sine_data()
+X_test, y_test = sine_data()
+
+#Instantiate the model
+model3 = Model()
+
+#Add layer
+model3.add(Layer_Dense(1,64))
+model3.add(Activation_ReLU())
+model3.add(Layer_Dense(64,64))
+model3.add(Activation_ReLU())
+model3.add(Layer_Dense(64,1))
+model3.add(Activation_Linear())
+
+#Set loss, optimizer and accuracy objects
+model3.set(
+    loss=Loss_MeanSquaredError(),
+    optimizer=Optimizer_Adam(learning_rate=0.005, decay=1e-3),
+    accuracy=Accuracy_Regression()
+)
+
+#Finalize the model
+model3.finalize()
+
+#Train the model
+model3.train(X, y, epochs=10000, print_every=100, validation_data=(X_test, y_test))
+
+#Set graphs
+graph_maker.graph_create_plot(X, y, graph_name="Training Data")
+graph_maker.graph_create_plot(X, model3.forward(X,False), graph_name="Training Data Prediction")
+graph_maker.graph_create_plot(model3.all_epochs, model3.all_losses, graph_name="Loss-Epoch Graph")
+graph_maker.graph_create_plot(X_test, y_test, graph_name="Test Data")
+graph_maker.graph_create_plot(X_test, model3.forward(X_test,False), graph_name="Test Data Prediction")
+graph_maker.graph_create_plot(model3.all_epochs, model3.all_accuracys, graph_name="Accuracy-Epoch Graph")
 
 #Show the grpahs and delete them
 graph_maker.graph_show()
