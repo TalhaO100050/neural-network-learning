@@ -675,7 +675,7 @@ if len(y_test.shape) == 2:
     y_test = np.argmax(y_test, axis=1)
 accuracy = np.mean(predictions == y_test)
 
-print(f'acc, {accuracy:.3}, loss: {loss:.3}')
+print(f'validation, acc, {accuracy:.3}, loss: {loss:.3}')
 
 
 #Test graphs

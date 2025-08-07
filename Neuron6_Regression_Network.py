@@ -750,7 +750,7 @@ accuracy_precision = np.std(y) / 250
 predictions = activation3.output
 accuracy = np.mean(np.absolute(predictions < y) < accuracy_precision)
 
-print(f'acc, {accuracy:.3}, loss: {loss:.3f}')
+print(f'validation, acc, {accuracy:.3}, loss: {loss:.3f}')
 
 
 #Test graphs

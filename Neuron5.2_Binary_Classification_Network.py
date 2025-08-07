@@ -668,7 +668,7 @@ loss = loss_function.calculate(activation2.output, y_test)
 predictions = (activation2.output >= 0.5) * 1
 accuracy = np.mean(predictions==y)
 
-print(f'acc, {accuracy:.3}, loss: {loss:.3}')
+print(f'validation, acc, {accuracy:.3}, loss: {loss:.3}')
 
 
 #Test graphs
