@@ -725,6 +725,11 @@ class Model:
         #Softmax classifier's output object
         self.softmax_classifier_output = None
 
+        #Create lists for saving graph data
+        self.all_epochs = []
+        self.all_losses = []
+        self.all_accuracys = []
+
     #Add objects to the model
     def add(self, layer):
         self.layers.append(layer)
@@ -805,7 +810,7 @@ class Model:
                 self.optimizer.update_params(layer)
             self.optimizer.post_update_params()
 
-            #Print a summary
+            #Print a summary and save the data for graph
             if not epoch % print_every:
                 print(f"epoch: {epoch}, " +
                     f"acc: {accuracy:.3f}, " +
@@ -813,7 +818,12 @@ class Model:
                     f"(data_loss: {data_loss:.3f}, " +
                     f"reg_loss: {regularization_loss:.3f}) " +
                     f"lr: {self.optimizer.current_learning_rate}")
-        
+                
+                self.all_epochs.append(epoch)
+                self.all_losses.append(loss)
+                self.all_accuracys.append(accuracy)
+                
+
         #If there is the validation data
         if validation_data is not None:
             #For better readability
@@ -871,7 +881,8 @@ class Model:
         for layer in reversed(self.layers):
             layer.backward(layer.next.dinputs)
 
-            
+#Create graph maker    
+graph_maker = Graph_maker()
 
 
 #Create dataset
@@ -882,9 +893,10 @@ X_test, y_test = spiral_data(samples=100, classes=3)
 model = Model()
 
 #Add layer
-model.add(Layer_Dense(2,32, weight_regularizer_l2=5e-4, bias_regularizer_l2=5e-4))
+model.add(Layer_Dense(2,512, weight_regularizer_l2=5e-4, bias_regularizer_l2=5e-4))
 model.add(Activation_ReLU())
-model.add(Layer_Dense(32,3))
+model.add(Layer_Dropout(0.1))
+model.add(Layer_Dense(512,3))
 model.add(Activation_Softmax())
 
 
@@ -901,117 +913,24 @@ model.finalize()
 #Train the model
 model.train(X, y, epochs=10000, print_every=100, validation_data=(X_test, y_test))
 
-graph_maker = Graph_maker()
+#Set graphs
+graph_maker.graph_create_scatter(X[:,0], X[:,1], c=y, graph_name="Training Data")
+graph_maker.graph_create_scatter(X[:,0], X[:,1], c=np.argmax(model.forward(X,False), axis=1), graph_name="Training Data Prediction")
+graph_maker.graph_create_plot(model.all_epochs, model.all_losses, graph_name="Loss-Epoch Graph")
+graph_maker.graph_create_scatter(X_test[:,0], X_test[:,1], c=y_test, graph_name="Test Data")
+graph_maker.graph_create_scatter(X_test[:,0], X_test[:,1], c=np.argmax(model.forward(X_test,False), axis=1), graph_name="Test Data Prediction")
+graph_maker.graph_create_plot(model.all_epochs, model.all_accuracys, graph_name="Accuracy-Epoch Graph")
 
-graph_maker.graph_create_all_graph(model, -1, 1, -1, 1, graph_name="graph", axis_ratio=1, mixing_colors=1)
+#Show the grpahs and delete them
 graph_maker.graph_show()
+graph_maker.clear_graphs()
 
-"""
-#Accuracy precision for accuracy calculation
-#There are no real accuracy factor for regression problem, but we can simulate/approximate it. We'll calculate it by checking how many values 
-#have a difference to their ground truth equivalent less than given precision. We'll calculate this precision as a fraction of standard deviation
-#of all the ground truth values
-accuracy_precision = np.std(y) / 250
+#Set graphs for all the inputs
+graph_maker.graph_create_all_graph(model, -1, 1, -1, 1, graph_name="Classification Map", axis_ratio=1)
+graph_maker.graph_create_all_graph(model, -4, 4, -4, 4, graph_name="Classification Map 4x", axis_ratio=1)
+graph_maker.graph_create_all_graph(model, -1, 1, -1, 1, graph_name="Prediction Confidence Map", axis_ratio=1, mixing_colors=1)
+graph_maker.graph_create_all_graph(model, -4, 4, -4, 4, graph_name="Prediction Confidence Map 4x", axis_ratio=1, mixing_colors=1)
 
-#Make lists for graphs
-all_loss = []
-all_accuracy = []
-all_epoch = []
-
-#Train in loop
-for epoch in range(10001):
-
-    #Calculate
-    dense1.forward(X)
-    activation1.forward(dense1.output)
-
-    dense2.forward(activation1.output)
-    activation2.forward(dense2.output)
-
-    dense3.forward(activation2.output)
-    activation3.forward(dense3.output)
-
-    data_loss = loss_function.calculate(activation3.output, y)
-
-    regularization_loss = \
-        loss_function.regularization_loss(dense1) + \
-        loss_function.regularization_loss(dense2) + \
-        loss_function.regularization_loss(dense3)
-
-    loss = data_loss + regularization_loss
-
-    #Calculate accuracy from activation2 and targets
-    predictions = activation3.output
-    accuracy = np.mean(np.absolute(predictions - y) < accuracy_precision)
-
-    if not epoch % 100:
-        print(f'epoch: {epoch} ' + 
-              f'acc: {accuracy:.3f} ' + 
-              f'loss: {loss:.3f} ' + 
-              f'(data_loss: {data_loss:.3f} ' + 
-              f'reg_loss: {regularization_loss:.3f}) '
-              f'lr: {optimizer.current_learning_rate} ')
-        
-        all_loss.append(loss)
-        all_accuracy.append(accuracy)
-        all_epoch.append(epoch)
-
-    #Backward pass
-    loss_function.backward(activation3.output, y)
-    activation3.backward(loss_function.dinputs)
-    dense3.backward(activation3.dinputs)
-    activation2.backward(dense3.dinputs)
-    dense2.backward(activation2.dinputs)
-    activation1.backward(dense2.dinputs)
-    dense1.backward(activation1.dinputs)
-    
-    #Update weights and biases
-    optimizer.pre_update_params()
-    optimizer.update_params(dense1)
-    optimizer.update_params(dense2)
-    optimizer.update_params(dense3)
-    optimizer.post_update_params()
-
-
-
-
-#Create graphs
-graph_maker = Graph_maker()
-
-#Example, guess, loss and accuracy graphs
-graph_maker.graph_create_plot(X, y, graph_name="Gerçek veri")
-graph_maker.graph_create_plot(X, activation3.output, graph_name="Tahmin")
-graph_maker.graph_create_plot(all_epoch, all_loss, graph_name="Loss graph")
-graph_maker.graph_create_plot(all_epoch, all_accuracy, graph_name="Accuracy graph")
-
-
-
-#Validate the model
-
-#Create test data 
-X_test, y_test = sine_data()
-
-#Perform a forward pass of our testing data through this layer
-dense1.forward(X_test)
-activation1.forward(dense1.output)
-dense2.forward(activation1.output)
-activation2.forward(dense2.output)
-dense3.forward(activation2.output)
-activation3.forward(dense3.output)
-loss = loss_function.calculate(activation3.output, y_test)
-
-accuracy_precision = np.std(y) / 250
-
-#Calculate accuracy from output of activation3 and targets calculate values along first axis
-predictions = activation3.output
-accuracy = np.mean(np.absolute(predictions < y) < accuracy_precision)
-
-print(f'acc, {accuracy:.3}, loss: {loss:.3f}')
-
-
-#Test graphs
-graph_maker.graph_create_plot(X_test, y_test, graph_name="Test verisi")
-graph_maker.graph_create_plot(X_test, activation3.output, graph_name="Test verisi tahmin")
-
-#Show graph and clear data
-graph_maker.graph_show()"""
+#Show the grpahs and delete them
+graph_maker.graph_show()
+graph_maker.clear_graphs()
