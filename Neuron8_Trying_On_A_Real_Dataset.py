@@ -1091,3 +1091,13 @@ model.finalize()
 
 #Train the model
 model.train(X, y, validation_data=(X_test, y_test), epochs=10, batch_size=128, print_every=100)
+
+#Ask for images
+while True:
+    print()
+    print("0 T-Shirt, 1 Trouser, 2 Pullover, 3 Dress, 4 Coat, 5 Sandal, 6 Shirt, 7 Sneaker, 8 Bag, 9 Ankle Boot")
+    category = input("Input category number(0-9): ")
+    image_number = input("Input image number(0000-0999): ")
+    image = np.array(cv2.imread(os.path.join("fashion_mnist_images/test", category, image_number + ".png"), cv2.IMREAD_UNCHANGED))
+    image = image.flatten()
+    print("Prediction =",np.argmax(model.forward(np.array([image]), training=False)))
