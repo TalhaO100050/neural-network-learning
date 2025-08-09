@@ -925,44 +925,11 @@ class Model:
                 f"(data_loss: {epoch_data_loss:.3f}, " +
                 f"reg_loss: {epoch_regularization_loss:.3f}) " +
                 f"lr: {self.optimizer.current_learning_rate}")
-
+            
         #If there is the validation data
         if validation_data is not None:
-
-            #Reset accumulated values in loss and accuracy objects
-            self.accuracy.new_pass()
-            self.loss.new_pass()
-
-            #Iterate over steps
-            for step in range(validation_steps):
-
-                #If batch size is not set - train using one step and full dataset
-                if batch_size is None:
-                    batch_X = X_val
-                    batch_y = y_val
-                #Otherwise slice a batch
-                else:
-                    batch_X = X_val[step*batch_size:(step+1)*batch_size]
-                    batch_y = y_val[step*batch_size:(step+1)*batch_size]
-
-                #Perform the forward pass
-                output = self.forward(batch_X, training=False)
-
-                #Calculate the loss
-                self.loss.calculate(output, batch_y)
-
-                #Get predictions and calculate an accuracy
-                predictions = self.output_layer_activation.predictions(output)
-                self.accuracy.calculate(predictions, batch_y)
-
-            #Get and print validation loss and accuracy
-            validation_loss = self.loss.calculate_accumulated()
-            validation_accuracy = self.accuracy.calculate_accumulated()
-
-            #Print a summary
-            print(f"validation, " + 
-                f"acc: {validation_accuracy:.3f}, " + 
-                f"loss: {validation_loss:.3f}")
+            #Evaluate the model:
+            self.evaluate(*validation_data, batch_size=batch_size)
             
     #Perform forward pass
     def forward(self, X, training):
@@ -1000,6 +967,49 @@ class Model:
         #Call backward method going through all the objects in reverse order passing dinputs as a parameter
         for layer in reversed(self.layers):
             layer.backward(layer.next.dinputs)
+
+    #Evaluates the model using passed in dataset
+    def evaluate(self, X_val, y_val, *, batch_size=None):
+        #Default value if batch size is not set
+        validation_steps = 1
+        #Calculate number of steps
+        if batch_size is not None:
+            validation_steps = len(X_val) // batch_size
+            #Dividing round down. If there are some remaining data, but not a full batch, this won't include it
+            #Add 1 to include this not full batch
+            if validation_steps * batch_size < len(X_val):
+                validation_steps += 1
+
+
+        #Reset accumulated values in loss and accuracy objects
+        self.accuracy.new_pass()
+        self.loss.new_pass()
+
+        #Iterate over steps
+        for step in range(validation_steps):
+            #If batch size is not set - train using one step and full dataset
+            if batch_size is None:
+                batch_X = X_val
+                batch_y = y_val
+            #Otherwise slice a batch
+            else:
+                batch_X = X_val[step*batch_size:(step+1)*batch_size]
+                batch_y = y_val[step*batch_size:(step+1)*batch_size]
+            #Perform the forward pass
+            output = self.forward(batch_X, training=False)
+            #Calculate the loss
+            self.loss.calculate(output, batch_y)
+            #Get predictions and calculate an accuracy
+            predictions = self.output_layer_activation.predictions(output)
+            self.accuracy.calculate(predictions, batch_y)
+
+        #Get and print validation loss and accuracy
+        validation_loss = self.loss.calculate_accumulated()
+        validation_accuracy = self.accuracy.calculate_accumulated()
+        #Print a summary
+        print(f"validation, " + 
+            f"acc: {validation_accuracy:.3f}, " + 
+            f"loss: {validation_loss:.3f}")
 
 from zipfile import ZipFile
 import os
@@ -1092,12 +1102,4 @@ model.finalize()
 #Train the model
 model.train(X, y, validation_data=(X_test, y_test), epochs=10, batch_size=128, print_every=100)
 
-#Ask for images
-while True:
-    print()
-    print("0 T-Shirt, 1 Trouser, 2 Pullover, 3 Dress, 4 Coat, 5 Sandal, 6 Shirt, 7 Sneaker, 8 Bag, 9 Ankle Boot")
-    category = input("Input category number(0-9): ")
-    image_number = input("Input image number(0000-0999): ")
-    image = np.array(cv2.imread(os.path.join("fashion_mnist_images/test", category, image_number + ".png"), cv2.IMREAD_UNCHANGED))
-    image = image.flatten()
-    print("Prediction =",np.argmax(model.forward(np.array([image]), training=False)))
+model.evaluate(X, y)
