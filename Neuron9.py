@@ -1092,6 +1092,39 @@ class Model:
 
         #Return a model
         return model
+    
+    #Predicts on the samples
+    def predict(self, X, *, batch_size=None):
+        #Default value if batch size is not being set
+        prediction_steps = 1
+
+        #Calculate number of samples
+        if batch_size is not None:
+            prediction_steps = len(X) // batch_size
+            #Dividing round down. If there are some remaining data, but not a full batch, this won't include it
+            #Add 1 to include this not full batch
+            prediction_steps += 1
+
+        #Model outputs
+        output = []
+
+        #Iterate over steps
+        for step in range(prediction_steps):
+            #If batch size is not set - train using one step and full dataset
+            if batch_size is None:
+                batch_X = X
+            #Otherwise slice a batch
+            else:
+                batch_X = X[step*batch_size:(step+1)*batch_size]
+            
+            #Perform the forward pass
+            batch_output = self.forward(batch_X, training=False)
+
+            #Append batch prediction to the list of predictions
+            output.append(batch_output)
+
+        #Stack and return results
+        return np.vstack(output)
 
 from zipfile import ZipFile
 import os
@@ -1186,3 +1219,40 @@ model.train(X, y, validation_data=(X_test, y_test), epochs=10, batch_size=128, p
 
 #Save the model
 model.save('fashion_mnist.model')
+
+#Label index to label name relation
+fashion_mnist_labels = {
+    0: 'T-shirt/top',
+    1: 'Trouser',
+    2: 'Pullover',
+    3: 'Dress',
+    4: 'Coat',
+    5: 'Sandal',
+    6: 'Shirt',
+    7: 'Sneaker',
+    8: 'Bag',
+    9: 'Ankle boot'
+}
+
+#Read an image
+image_data = cv2.imread("tshirt.png", cv2.IMREAD_GRAYSCALE)
+
+#Resize to the same size as Fashion MNIST images
+image_data = cv2.resize(image_data, (28, 28))
+
+#Invert image colors
+image_data = 255 - image_data
+
+#Reshape and scale pixel data
+image_data = ((image_data.reshape(1, -1)).astype(np.float32) - 127.5) / 127.5
+
+#Prediction on this image
+predictions = model.predict(image_data)
+
+#Get prediction instead of confidance levels
+predictions = model.output_layer_activation.predictions(predictions)
+
+#Get label name from label index
+predictions = fashion_mnist_labels[predictions[0]]
+
+print(predictions)
