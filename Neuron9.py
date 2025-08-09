@@ -1235,7 +1235,8 @@ fashion_mnist_labels = {
 }
 
 #Read an image
-image_data = cv2.imread("tshirt.png", cv2.IMREAD_GRAYSCALE)
+path = os.path.join("images", "dress.png")
+image_data = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
 
 #Resize to the same size as Fashion MNIST images
 image_data = cv2.resize(image_data, (28, 28))
